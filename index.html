@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Riksdagsledamoter pa Twitter</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f9fafb; color: #111827; padding: 2rem 1rem; }
+    .container { max-width: 1100px; margin: 0 auto; }
+    h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.25rem; }
+    .subtitle { font-size: 0.875rem; color: #6b7280; margin-bottom: 1.5rem; }
+    .disclaimer { background: #fef3c7; border: 1px solid #f59e0b; border-radius: 0.5rem; padding: 0.75rem 1rem; font-size: 0.8125rem; color: #92400e; margin-bottom: 1.5rem; }
+    .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }
+    .pill { display: inline-flex; align-items: center; gap: 0.375rem; padding: 0.375rem 0.75rem; border-radius: 9999px; font-size: 0.8125rem; font-weight: 500; border: 1px solid #d1d5db; background: #fff; color: #374151; cursor: pointer; transition: all 0.15s; }
+    .pill:hover { border-color: #9ca3af; }
+    .pill.active { background: #111827; color: #fff; border-color: #111827; }
+    .pill .dot { width: 0.625rem; height: 0.625rem; border-radius: 50%; flex-shrink: 0; }
+    .divider { width: 1px; height: 1.5rem; background: #d1d5db; margin: 0 0.25rem; }
+    .export-btn { display: inline-flex; align-items: center; padding: 0.375rem 0.75rem; border-radius: 9999px; font-size: 0.8125rem; font-weight: 500; border: 1px solid #d1d5db; background: #fff; color: #374151; cursor: pointer; transition: all 0.15s; }
+    .export-btn:hover { border-color: #9ca3af; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 0.5rem; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    thead { background: #f9fafb; }
+    th { text-align: left; padding: 0.75rem 1rem; font-size: 0.75rem; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer; user-select: none; white-space: nowrap; }
+    th:hover { color: #111827; }
+    th .sort-arrow { margin-left: 0.25rem; font-size: 0.625rem; }
+    td { padding: 0.625rem 1rem; font-size: 0.875rem; border-top: 1px solid #f3f4f6; }
+    tr:hover td { background: #f9fafb; }
+    a { color: #3b82f6; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .party-cell { display: inline-flex; align-items: center; gap: 0.375rem; }
+    .badge { display: inline-block; padding: 0.125rem 0.5rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 500; }
+    .badge-success { background: #d1fae5; color: #065f46; }
+    .badge-warning { background: #fef3c7; color: #92400e; }
+    .badge-neutral { background: #f3f4f6; color: #6b7280; }
+    .search-input { padding: 0.375rem 0.75rem; border-radius: 9999px; font-size: 0.8125rem; border: 1px solid #d1d5db; outline: none; width: 180px; }
+    .search-input:focus { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,0.15); }
+  </style>
+</head>
+<body>
+  <div id="app" class="container">
+    <h1>Riksdagsledamoter pa Twitter</h1>
+    <p class="subtitle">
+      {{ filteredMembers.length }} ledamoter med Twitter-konto
+      <span v-if="meta"> &middot; Data fran {{ formatDate(meta.generatedAt) }}</span>
+    </p>
+
+    <div class="disclaimer">
+      OBS: Detta ar inte livedata. Informationen baseras pa en statisk kopia av data fran {{ meta ? formatDate(meta.generatedAt) : '' }} och uppdateras inte automatiskt.
+    </div>
+
+    <div class="controls">
+      <input class="search-input" v-model="search" placeholder="Sok namn...">
+      <span class="divider"></span>
+      <button
+        v-for="party in allParties"
+        :key="party"
+        class="pill"
+        :class="{ active: selectedParties.includes(party) }"
+        @click="toggleParty(party)"
+      >
+        <span class="dot" :style="{ background: partyColorHex[party] || '#9ca3af' }"></span>
+        {{ party }}
+      </button>
+      <span class="divider"></span>
+      <button class="export-btn" @click="exportCsv">CSV</button>
+      <button class="export-btn" @click="exportJson">JSON</button>
+      <button class="export-btn" @click="exportExcel">Excel</button>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th v-for="col in columnDefs" :key="col.key" @click="sortBy(col.key)">
+            {{ col.label }}
+            <span class="sort-arrow" v-if="sortKey === col.key">{{ sortDir === 'asc' ? '\u25B2' : '\u25BC' }}</span>
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="m in filteredMembers" :key="m.id">
+          <td>{{ m.fullName }}</td>
+          <td><span class="party-cell"><span class="dot" :style="{ background: partyColorHex[m.party] || '#9ca3af' }"></span>{{ m.party }}</span></td>
+          <td><a v-if="m.email" :href="'mailto:' + m.email">{{ m.email }}</a><span v-else>-</span></td>
+          <td><a v-if="m.twitter.username" :href="'https://x.com/' + m.twitter.username" target="_blank">@{{ m.twitter.username }}</a><span v-else>-</span></td>
+          <td>
+            <span v-if="!m.twitter.lastTweetDate" class="badge badge-neutral">Ingen data</span>
+            <span v-else class="badge" :class="isRecent(m.twitter.lastTweetDate) ? 'badge-success' : 'badge-warning'">{{ formatDate(m.twitter.lastTweetDate) }}</span>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    const { createApp, ref, computed } = Vue;
+
+    createApp({
+      setup() {
+        const members = ref([]);
+        const meta = ref(null);
+        const selectedParties = ref([]);
+        const search = ref('');
+        const sortKey = ref('twitter.lastTweetDate');
+        const sortDir = ref('desc');
+
+        const partyColorHex = {
+          S: '#dc2626', M: '#0284c7', SD: '#eab308', C: '#16a34a',
+          V: '#991b1b', KD: '#1e40af', L: '#38bdf8', MP: '#22c55e',
+        };
+
+        const columnDefs = [
+          { key: 'fullName', label: 'Namn' },
+          { key: 'party', label: 'Parti' },
+          { key: 'email', label: 'E-post' },
+          { key: 'twitter.username', label: 'Twitter' },
+          { key: 'twitter.lastTweetDate', label: 'Senaste tweet' },
+        ];
+
+        fetch('output.json')
+          .then(r => r.json())
+          .then(data => {
+            members.value = data.members;
+            meta.value = data.meta;
+          });
+
+        const allParties = computed(() =>
+          [...new Set(members.value.map(m => m.party))].filter(p => p && p !== '-').sort()
+        );
+
+        function toggleParty(party) {
+          const idx = selectedParties.value.indexOf(party);
+          if (idx >= 0) selectedParties.value = selectedParties.value.filter(p => p !== party);
+          else selectedParties.value = [...selectedParties.value, party];
+        }
+
+        function getNestedValue(obj, key) {
+          return key.split('.').reduce((o, k) => o?.[k], obj);
+        }
+
+        const filteredMembers = computed(() => {
+          let list = members.value.filter(m => m.twitter.username);
+          if (selectedParties.value.length > 0) {
+            list = list.filter(m => selectedParties.value.includes(m.party));
+          }
+          if (search.value.trim()) {
+            const q = search.value.trim().toLowerCase();
+            list = list.filter(m => m.fullName.toLowerCase().includes(q));
+          }
+          list = [...list].sort((a, b) => {
+            const aVal = getNestedValue(a, sortKey.value) ?? '';
+            const bVal = getNestedValue(b, sortKey.value) ?? '';
+            const cmp = String(aVal).localeCompare(String(bVal), 'sv');
+            return sortDir.value === 'asc' ? cmp : -cmp;
+          });
+          return list;
+        });
+
+        function sortBy(key) {
+          if (sortKey.value === key) {
+            sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc';
+          } else {
+            sortKey.value = key;
+            sortDir.value = key === 'twitter.lastTweetDate' ? 'desc' : 'asc';
+          }
+        }
+
+        function formatDate(dateStr) {
+          if (!dateStr) return '-';
+          return new Date(dateStr).toLocaleDateString('sv-SE');
+        }
+
+        function isRecent(dateStr) {
+          const d = new Date(dateStr);
+          const sixMonthsAgo = new Date();
+          sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+          return d >= sixMonthsAgo;
+        }
+
+        function getExportRows() {
+          return filteredMembers.value.map(m => ({
+            Namn: m.fullName,
+            Parti: m.party,
+            Valkrets: m.constituency,
+            'E-post': m.email || '',
+            Twitter: m.twitter.username ? '@' + m.twitter.username : '',
+            'Senaste tweet': m.twitter.lastTweetDate ? formatDate(m.twitter.lastTweetDate) : '',
+          }));
+        }
+
+        function downloadFile(content, filename, mimeType) {
+          const blob = new Blob([content], { type: mimeType });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          a.click();
+          URL.revokeObjectURL(url);
+        }
+
+        function exportCsv() {
+          const rows = getExportRows();
+          if (!rows.length) return;
+          const headers = Object.keys(rows[0]);
+          const lines = [
+            headers.join(','),
+            ...rows.map(r => headers.map(h => {
+              const val = String(r[h]);
+              return val.includes(',') || val.includes('"') ? '"' + val.replace(/"/g, '""') + '"' : val;
+            }).join(','))
+          ];
+          downloadFile(lines.join('\n'), 'ledamoter-twitter.csv', 'text/csv;charset=utf-8');
+        }
+
+        function exportJson() {
+          downloadFile(JSON.stringify(getExportRows(), null, 2), 'ledamoter-twitter.json', 'application/json');
+        }
+
+        function exportExcel() {
+          const rows = getExportRows();
+          const ws = XLSX.utils.json_to_sheet(rows);
+          const wb = XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(wb, ws, 'Ledamoter');
+          XLSX.writeFile(wb, 'ledamoter-twitter.xlsx');
+        }
+
+        return {
+          members, meta, selectedParties, search, sortKey, sortDir,
+          partyColorHex, columnDefs, allParties, filteredMembers,
+          toggleParty, sortBy, formatDate, isRecent,
+          exportCsv, exportJson, exportExcel,
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>
